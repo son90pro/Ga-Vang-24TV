@@ -20,7 +20,7 @@ def fetch_json(url):
         return None
 
 def format_match_time(timestamp):
-    """Chuyển đổi timestamp sang định dạng giờ và ngày tháng chuẩn (VD: 12:00 22/09)"""
+    """Chuyển đổi timestamp sang định dạng giờ và ngày tháng chuẩn (VD: 19:58 30/10)"""
     vn_tz = timezone(timedelta(hours=7))
     if timestamp:
         try:
@@ -31,70 +31,26 @@ def format_match_time(timestamp):
             pass
     return datetime.now(vn_tz).strftime("%H:%M %d/%m")
 
-def extract_teams_from_item(item):
-    """Bóc tách tên đội bóng thông minh từ mọi ngóc ngách của API JSON"""
-    home, away, logo = "", "", ""
-    
-    # 1. Quét các key phổ biến cho Home
-    for k in ["home_name", "home_team_name", "home_title", "home_team", "home", "team1", "t1", "host"]:
-        val = item.get(k)
-        if val:
+def get_team_info(obj):
+    """Trích xuất tên và logo an toàn từ một trường dữ liệu đội bóng (có thể là string hoặc dict)"""
+    name = ""
+    logo = ""
+    if isinstance(obj, str):
+        name = obj.strip()
+    elif isinstance(obj, dict):
+        # Thử lấy tên từ các key con phổ biến
+        for k in ["name", "team_name", "title", "common_name", "display_name", "short_name"]:
+            val = obj.get(k)
             if isinstance(val, str) and val.strip():
-                home = val.strip()
+                name = val.strip()
                 break
-            elif isinstance(val, dict):
-                for sub in ["name", "team_name", "title", "common_name", "display_name"]:
-                    if isinstance(val.get(sub), str) and val.get(sub).strip():
-                        home = val.get(sub).strip()
-                        break
-                for l_sub in ["logo", "image", "badge", "flag", "url"]:
-                    if isinstance(val.get(l_sub), str) and val.get(l_sub).startswith("http"):
-                        logo = val.get(l_sub).strip()
-                        break
-                if home:
-                    break
-
-    # 2. Quét các key phổ biến cho Away
-    for k in ["away_name", "away_team_name", "away_title", "away_team", "away", "team2", "t2", "guest", "visitor"]:
-        val = item.get(k)
-        if val:
-            if isinstance(val, str) and val.strip():
-                away = val.strip()
-                break
-            elif isinstance(val, dict):
-                for sub in ["name", "team_name", "title", "common_name", "display_name"]:
-                    if isinstance(val.get(sub), str) and val.get(sub).strip():
-                        away = val.get(sub).strip()
-                        break
-                if away:
-                    break
-
-    # 3. Lấy logo nếu nằm ở các key riêng biệt ngoài cùng
-    if not logo:
-        for k in ["home_logo", "home_image", "logo", "team1_logo", "image", "badge"]:
-            val = item.get(k)
+        # Thử lấy logo từ object đội bóng
+        for k in ["logo", "image", "badge", "flag", "icon", "url"]:
+            val = obj.get(k)
             if isinstance(val, str) and val.startswith("http"):
                 logo = val.strip()
                 break
-
-    # 4. Fallback thông minh: Tự bóc tách từ chuỗi title/name nếu API không trả về key riêng
-    if not home or not away or home == "Đội Nhà" or away == "Đội Khách":
-        for title_key in ["title", "name", "match_name", "slug", "tournament_name"]:
-            t_val = item.get(title_key)
-            if isinstance(t_val, str) and any(sep in t_val for sep in [" vs ", " VS ", " v ", " V ", " vs. ", " - "]):
-                for sep in [" vs ", " VS ", " v ", " V ", " vs. ", " - "]:
-                    if sep in t_val:
-                        parts = t_val.split(sep)
-                        if len(parts) >= 2:
-                            if not home or home == "Đội Nhà":
-                                home = parts[0].strip()
-                            if not away or away == "Đội Khách":
-                                away = parts[1].strip()
-                            break
-                if home and away and home != "Đội Nhà" and away != "Đội Khách":
-                    break
-
-    return (home or "Đội Nhà", away or "Đội Khách", logo)
+    return name, logo
 
 def parse_matches(data, sport_icon):
     results = []
@@ -125,8 +81,57 @@ def parse_matches(data, sport_icon):
         if not format_match_id:
             continue
             
-        home, away, logo = extract_teams_from_item(item)
-        
+        # 1. Quét tìm tên và logo đội nhà (Home)
+        home, logo = "", ""
+        for h_key in ["home", "home_team", "home_name", "team1", "t1", "host"]:
+            if h_key in item:
+                h_name, h_logo = get_team_info(item.get(h_key))
+                if h_name:
+                    home = h_name
+                if h_logo:
+                    logo = h_logo
+                if home:
+                    break
+
+        # 2. Quét tìm tên đội khách (Away)
+        away = ""
+        for a_key in ["away", "away_team", "away_name", "team2", "t2", "guest", "visitor"]:
+            if a_key in item:
+                a_name, a_logo = get_team_info(item.get(a_key))
+                if a_name:
+                    away = a_name
+                    # Đôi khi logo nằm ở đội khách nếu đội nhà không có
+                    if not logo and a_logo:
+                        logo = a_logo
+                if away:
+                    break
+
+        # 3. Quét dự phòng logo nếu nằm ở các key độc lập bên ngoài
+        if not logo:
+            for l_key in ["home_logo", "logo", "image", "team1_logo", "badge"]:
+                l_val = item.get(l_key)
+                if isinstance(l_val, str) and l_val.startswith("http"):
+                    logo = l_val.strip()
+                    break
+
+        # 4. Dự phòng tuyệt đối: Bóc tách trực tiếp từ chuỗi tiêu đề chung nếu API không tách sẵn key
+        if not home or not away:
+            for title_k in ["title", "name", "match_name", "slug"]:
+                t_val = item.get(title_k)
+                if isinstance(t_val, str) and any(sep in t_val for sep in [" vs ", " VS ", " - "]):
+                    for sep in [" vs ", " VS ", " - "]:
+                        if sep in t_val:
+                            parts = t_val.split(sep)
+                            if len(parts) >= 2:
+                                if not home: home = parts[0].strip()
+                                if not away: away = parts[1].strip()
+                                break
+                    if home and away:
+                        break
+
+        home = home or "Đội Nhà"
+        away = away or "Đội Khách"
+
         caster = (
             item.get("caster") or 
             item.get("commentator") or 
@@ -196,5 +201,4 @@ def generate_m3u():
     print(f"Đã cập nhật thành công file {OUTPUT_M3U}!")
 
 if __name__ == "__main__":
-    generate_m3u()
     
