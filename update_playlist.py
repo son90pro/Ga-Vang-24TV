@@ -14,54 +14,57 @@ def fetch_data():
 
 def generate_m3u():
     data = fetch_data()
+    # Tùy thuộc cấu trúc JSON thực tế của API, lấy danh sách trận đấu
     matches = data.get("bb_live_data", [])
     
-    # Bắt đầu nội dung file M3U
     m3u_content = "#EXTM3U x-tvg-url=\"\"\n"
     
-    # Định nghĩa ưu tiên trạng thái trận đấu
-    # Các trận đang đá (Q1, Q2, Q3, Q4...) hoặc sắp đá (NS, TBD)
-    active_matches = []
-    other_matches = []
-    
     for match in matches:
+        match_id = match.get("match_id", "")
         status = match.get("status_name", "NS")
-        # Bỏ qua các trận đã đá xong hoàn toàn nếu muốn gọn, hoặc giữ lại tùy ý
+        
+        # Bỏ qua các trận đã kết thúc hoàn toàn nếu muốn gọn danh sách
         if status == "FT":
             continue
             
-        match_id = match.get("match_id")
+        # Trích xuất thông tin tên đội, logo, bình luận viên (fallback an toàn nếu API đổi tên trường)
+        home_team = match.get("home_team", match.get("home_name", "Đội Nhà"))
+        away_team = match.get("away_team", match.get("away_name", "Đội Khách"))
+        home_logo = match.get("home_logo", match.get("home_image", ""))
+        away_logo = match.get("away_logo", match.get("away_image", ""))
+        
+        # Lấy tên bình luận viên (nếu API có trả về, ví dụ: caster, commentator, blv)
+        commentator = match.get("commentator", match.get("caster", match.get("blv", "")))
+        blv_str = f" ({commentator})" if commentator else ""
+        
+        # Lấy tên kênh hoặc phân nhóm (ví dụ: Gà Vàng 24h TV, Xôi Lạc Z TV,...)
+        channel_name = match.get("channel_name", match.get("group_name", "Gà Vàng 24h TV"))
+        
+        # Tiêu đề hiển thị trên IPTV player (giống mẫu hình 2)
         home_score = match.get("home_score", 0)
         away_score = match.get("away_score", 0)
         
-        # Tiêu đề hiển thị trên IPTV player
         if status in ["NS", "TBD"]:
-            title = f"🔴 [Sắp diễn ra] Match ID: {match_id}"
-            group = "Sắp diễn ra"
+            time_status = "Sắp diễn ra"
         else:
-            title = f"⚽ [{status}] ({home_score}-{away_score}) Match ID: {match_id}"
-            group = "Đang diễn ra (LIVE)"
+            time_status = f"{status} ({home_score}-{away_score})"
             
-        # Link stream giả định dựa theo cấu trúc cakhia (thường nhúng qua match_id)
-        # Anh có thể thay đổi domain stream thực tế của cakhia nếu có player cụ thể
+        title = f"{time_status} ⚽ {home_team} vs {away_team}{blv_str}"
+        
+        # Link stream tương ứng
         stream_url = f"https://cakhia.gold/live/{match_id}"
         
-        item_string = f"#EXTINF:-1 tvg-group=\"{group}\",{title}\n{stream_url}\n"
+        # Định dạng dòng EXTINF chuẩn IPTV hỗ trợ logo và nhóm kênh
+        # Sử dụng logo đội nhà làm tvg-logo chính đại diện cho trận đấu
+        logo_url = home_logo if home_logo else ""
         
-        # Ưu tiên đưa các trận đang live lên đầu
-        if status not in ["NS", "TBD"]:
-            active_matches.append(item_string)
-        else:
-            other_matches.append(item_string)
-
-    # Gộp danh sách: Live ưu tiên trước, sau đó đến Sắp diễn ra
-    for item in active_matches + other_matches:
-        m3u_content += item
+        item_string = f'#EXTINF:-1 tvg-id="{match_id}" tvg-name="{home_team} vs {away_team}" tvg-logo="{logo_url}" group-title="{channel_name}",{title}\n{stream_url}\n'
+        m3u_content += item_string
 
     with open(OUTPUT_M3U, "w", encoding="utf-8") as f:
         f.write(m3u_content)
-    print(f"Đã cập nhật thành công file {OUTPUT_M3U} với {len(active_matches) + len(other_matches)} trận đấu!")
+    print(f"Đã cập nhật file {OUTPUT_M3U} thành công với đầy đủ logo, tên đội và BLV!")
 
 if __name__ == "__main__":
     generate_m3u()
-  
+    
