@@ -2,25 +2,27 @@ import json
 import urllib.request
 from datetime import datetime, timezone, timedelta
 
-# Hai API chính thức: Bóng đá (live-data) và Bóng rổ (bb-live-data)
-FOOTBALL_API = "https://seo.alpro-api-service.com/v1/live-data"
-BASKETBALL_API = "https://seo.alpro-api-service.com/v1/bb-live-data"
+# Endpoint chính thức mới từ gavangtvs.com
+API_URL = "https://gavangtvs.com/app/uploads/match-content/update-content-live.json"
 OUTPUT_M3U = "playlist.m3u"
 
 def fetch_json(url):
     try:
         req = urllib.request.Request(
             url, 
-            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+            headers={
+                "User-Agent": "Mozilla/5.0 (Android 16; Mobile; rv:158.0) Gecko/158.0 Firefox/158.0",
+                "Referer": "https://gavangtvs.com/"
+            }
         )
-        with urllib.request.urlopen(req, timeout=10) as response:
+        with urllib.request.urlopen(req, timeout=15) as response:
             return json.loads(response.read().decode("utf-8"))
     except Exception as e:
         print(f"Lỗi kết nối {url}: {e}")
         return None
 
 def format_match_time(timestamp):
-    """Chuyển đổi timestamp sang định dạng giờ và ngày tháng chuẩn (VD: 19:58 30/10)"""
+    """Chuyển đổi timestamp sang định dạng giờ và ngày tháng chuẩn (VD: 12:00 22/09)"""
     vn_tz = timezone(timedelta(hours=7))
     if timestamp:
         try:
@@ -31,16 +33,17 @@ def format_match_time(timestamp):
             pass
     return datetime.now(vn_tz).strftime("%H:%M %d/%m")
 
-def extract_teams_and_logo(item):
-    """Quét toàn bộ key động trong item để lấy chính xác tên đội nhà, đội khách và logo"""
+def extract_match_info(item):
+    """Bóc tách thông minh tên đội, logo, BLV và thời gian từ JSON cấu trúc mới"""
     home = ""
     away = ""
     logo = ""
+    caster = "Cris"
     
     if not isinstance(item, dict):
-        return "Đội Nhà", "Đội Khách", ""
-        
-    # Quét tất cả các key trong từ điển JSON của trận đấu
+        return "Đội Nhà", "Đội Khách", "", "Cris", datetime.now(timezone(timedelta(hours=7))).strftime("%H:%M %d/%m"), "⚽"
+
+    # 1. Lấy tên đội nhà / đội khách từ các key phổ biến hoặc object con
     for k, v in item.items():
         k_lower = k.lower()
         if any(x in k_lower for x in ["home", "team1", "host", "t1"]):
@@ -64,28 +67,48 @@ def extract_teams_and_logo(item):
             if isinstance(v, str) and v.startswith("http"):
                 if not logo: logo = v.strip()
 
-    # Fallback thông minh: Nếu vẫn thiếu, tìm trong mọi chuỗi có chứa ký tự phân tách trận đấu ("vs", "-")
+    # 2. Lấy thông tin BLV (Caster)
+    for c_key in ["caster", "commentator", "blv", "author"]:
+        if c_key in item and isinstance(item[c_key], str) and item[c_key].strip():
+            caster = item[c_key].strip()
+            break
+
+    # 3. Fallback bóc tách từ chuỗi tiêu đề (title/name) nếu thiếu tên đội
     if not home or not away or home == "Đội Nhà" or away == "Đội Khách":
-        for k, v in item.items():
-            if isinstance(v, str) and any(sep in v for sep in [" vs ", " VS ", " Vs ", " - "]):
+        for title_k in ["title", "name", "match_name", "slug"]:
+            t_val = item.get(title_k)
+            if isinstance(t_val, str) and any(sep in t_val for sep in [" vs ", " VS ", " Vs ", " - "]):
                 for sep in [" vs ", " VS ", " Vs ", " - "]:
-                    if sep in v:
-                        parts = v.split(sep)
+                    if sep in t_val:
+                        parts = t_val.split(sep)
                         if len(parts) >= 2:
                             if not home or home == "Đội Nhà": home = parts[0].strip()
                             if not away or away == "Đội Khách": away = parts[1].strip()
                             break
 
-    return home or "Đội Nhà", away or "Đội Khách", logo
+    home = home or "Đội Nhà"
+    away = away or "Đội Khách"
 
-def parse_matches(data, sport_icon):
-    results = []
+    # 4. Xác định môn thể thao (Bóng đá hay Bóng rổ dựa vào nội dung hoặc đường dẫn logo)
+    sport_icon = "⚽"
+    if "basketball" in logo.lower() or any(b_key in str(item).lower() for b_key in ["basketball", "nba", "bb-"]):
+        sport_icon = "🏀"
+
+    raw_time = item.get("start_time") or item.get("time") or item.get("match_time") or item.get("timestamp")
+    time_str = format_match_time(raw_time)
+    status = str(item.get("status_name") or item.get("status") or "").upper()
+
+    return home, away, logo, caster, time_str, sport_icon, status
+
+def generate_m3u():
+    data = fetch_json(API_URL)
     if not data:
-        return results
+        print("Không thể tải dữ liệu từ API mới!")
+        return
     
     match_list = []
     if isinstance(data, dict):
-        for k in ["data", "matches", "list", "result", "items", "content"]:
+        for k in ["data", "matches", "list", "result", "items", "content", "matchList"]:
             if k in data and isinstance(data[k], list):
                 match_list = data[k]
                 break
@@ -97,14 +120,9 @@ def parse_matches(data, sport_icon):
     elif isinstance(data, list):
         match_list = data
 
-    default_casters = ["Cris", "A Long", "Khang Hi", "Siêu Quậy", "Kayti", "Wem By", "Titan", "Naruto", "Đoàn Dự", "Rio", "Lữ Bố.Vip"]
-
+    matches = []
     for idx, item in enumerate(match_list):
         if not isinstance(item, dict):
-            continue
-            
-        status = str(item.get("status_name") or item.get("status") or "").upper()
-        if status == "FT":
             continue
             
         match_id = item.get("match_id") or item.get("id") or item.get("matchId")
@@ -112,38 +130,21 @@ def parse_matches(data, sport_icon):
         if not format_match_id:
             continue
             
-        home, away, logo = extract_teams_and_logo(item)
+        home, away, logo, caster, time_str, sport_icon, status = extract_match_info(item)
         
-        caster = (
-            item.get("caster") or 
-            item.get("commentator") or 
-            item.get("blv") or 
-            default_casters[idx % len(default_casters)]
-        )
-        
-        raw_time = item.get("start_time") or item.get("time") or item.get("match_time") or item.get("timestamp")
-        time_str = format_match_time(raw_time)
-        
-        results.append({
+        if status == "FT":
+            continue
+
+        matches.append({
             "match_id": format_match_id,
             "home": home,
             "away": away,
             "logo": logo,
             "caster": caster,
             "time": time_str,
-            "status": status,
-            "sport_icon": sport_icon
+            "sport_icon": sport_icon,
+            "status": status
         })
-        
-    return results
-
-def generate_m3u():
-    football_data = fetch_json(FOOTBALL_API)
-    basketball_data = fetch_json(BASKETBALL_API)
-    
-    matches = []
-    matches.extend(parse_matches(football_data, "⚽"))
-    matches.extend(parse_matches(basketball_data, "🏀"))
     
     # Lọc bỏ các trận đấu trùng lặp dựa trên match_id duy nhất
     seen_ids = set()
@@ -180,7 +181,7 @@ def generate_m3u():
 
     with open(OUTPUT_M3U, "w", encoding="utf-8") as f:
         f.write("\n".join(m3u_lines).strip() + "\n")
-    print(f"Đã cập nhật thành công file {OUTPUT_M3U} với {len(unique_matches)} trận đấu!")
+    print(f"Đã cập nhật thành công {len(unique_matches)} trận đấu vào file {OUTPUT_M3U} từ nguồn gavangtvs.com!")
 
 if __name__ == "__main__":
     generate_m3u()
