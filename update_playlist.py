@@ -4,9 +4,8 @@ import re
 from datetime import datetime, timezone, timedelta
 from html import unescape
 
-# Các endpoint chính thức từ gavangtvs.com (Bóng đá & Bóng rổ)
+# Chỉ định endpoint chính thức chuẩn xác của Bóng đá
 FOOTBALL_API = "https://gavangtvs.com/app/uploads/match-content/update-content-live.json"
-BASKETBALL_API = "https://gavangtvs.com/app/uploads/match-content/update-bb-live.json"
 OUTPUT_M3U = "playlist.m3u"
 
 def fetch_json(url):
@@ -41,7 +40,6 @@ def parse_html_content(html_text, sport_icon):
         r'match_id["\']?\s*[:=]\s*["\']?([a-fA-F0-9]{24})["\']?'
     ]
     
-    # Chia nhỏ HTML thành các khối trận đấu (match-card) nếu có
     cards = re.split(r'<(?:div|article)[^>]*class="[^"]*match-card[^"]*"', html_clean)
     if len(cards) <= 1:
         for pattern in id_patterns:
@@ -118,15 +116,10 @@ def parse_html_content(html_text, sport_icon):
 def generate_m3u():
     matches = []
     
-    # Lấy dữ liệu Bóng đá
+    # Lấy dữ liệu Bóng đá từ endpoint chuẩn
     fb_data = fetch_json(FOOTBALL_API)
     if fb_data and isinstance(fb_data, dict):
         matches.extend(parse_html_content(fb_data.get("live_content", ""), "⚽"))
-
-    # Lấy dữ liệu Bóng rổ
-    bb_data = fetch_json(BASKETBALL_API)
-    if bb_data and isinstance(bb_data, dict):
-        matches.extend(parse_html_content(bb_data.get("live_content", ""), "🏀"))
 
     # Lọc bỏ trùng lặp theo match_id
     seen_ids = set()
