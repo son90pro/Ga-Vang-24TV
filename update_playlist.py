@@ -31,23 +31,70 @@ def format_match_time(timestamp):
             pass
     return datetime.now(vn_tz).strftime("%H:%M %d/%m")
 
-def get_field(item, keys, default=""):
-    """Hàm bóc tách thông minh: Hỗ trợ triệt để cả dạng chuỗi lẫn object (dictionary) từ API"""
-    for key in keys:
-        val = item.get(key)
-        if val is not None:
-            if isinstance(val, (str, int, float)):
-                s = str(val).strip()
-                if s:
-                    return s
+def extract_teams_from_item(item):
+    """Bóc tách tên đội bóng thông minh từ mọi ngóc ngách của API JSON"""
+    home, away, logo = "", "", ""
+    
+    # 1. Quét các key phổ biến cho Home
+    for k in ["home_name", "home_team_name", "home_title", "home_team", "home", "team1", "t1", "host"]:
+        val = item.get(k)
+        if val:
+            if isinstance(val, str) and val.strip():
+                home = val.strip()
+                break
             elif isinstance(val, dict):
-                for sub in ["name", "team_name", "title", "common_name", "logo", "image", "url"]:
-                    sub_val = val.get(sub)
-                    if isinstance(sub_val, (str, int, float)):
-                        s = str(sub_val).strip()
-                        if s:
-                            return s
-    return default
+                for sub in ["name", "team_name", "title", "common_name", "display_name"]:
+                    if isinstance(val.get(sub), str) and val.get(sub).strip():
+                        home = val.get(sub).strip()
+                        break
+                for l_sub in ["logo", "image", "badge", "flag", "url"]:
+                    if isinstance(val.get(l_sub), str) and val.get(l_sub).startswith("http"):
+                        logo = val.get(l_sub).strip()
+                        break
+                if home:
+                    break
+
+    # 2. Quét các key phổ biến cho Away
+    for k in ["away_name", "away_team_name", "away_title", "away_team", "away", "team2", "t2", "guest", "visitor"]:
+        val = item.get(k)
+        if val:
+            if isinstance(val, str) and val.strip():
+                away = val.strip()
+                break
+            elif isinstance(val, dict):
+                for sub in ["name", "team_name", "title", "common_name", "display_name"]:
+                    if isinstance(val.get(sub), str) and val.get(sub).strip():
+                        away = val.get(sub).strip()
+                        break
+                if away:
+                    break
+
+    # 3. Lấy logo nếu nằm ở các key riêng biệt ngoài cùng
+    if not logo:
+        for k in ["home_logo", "home_image", "logo", "team1_logo", "image", "badge"]:
+            val = item.get(k)
+            if isinstance(val, str) and val.startswith("http"):
+                logo = val.strip()
+                break
+
+    # 4. Fallback thông minh: Tự bóc tách từ chuỗi title/name nếu API không trả về key riêng
+    if not home or not away or home == "Đội Nhà" or away == "Đội Khách":
+        for title_key in ["title", "name", "match_name", "slug", "tournament_name"]:
+            t_val = item.get(title_key)
+            if isinstance(t_val, str) and any(sep in t_val for sep in [" vs ", " VS ", " v ", " V ", " vs. ", " - "]):
+                for sep in [" vs ", " VS ", " v ", " V ", " vs. ", " - "]:
+                    if sep in t_val:
+                        parts = t_val.split(sep)
+                        if len(parts) >= 2:
+                            if not home or home == "Đội Nhà":
+                                home = parts[0].strip()
+                            if not away or away == "Đội Khách":
+                                away = parts[1].strip()
+                            break
+                if home and away and home != "Đội Nhà" and away != "Đội Khách":
+                    break
+
+    return (home or "Đội Nhà", away or "Đội Khách", logo)
 
 def parse_matches(data, sport_icon):
     results = []
@@ -78,15 +125,8 @@ def parse_matches(data, sport_icon):
         if not format_match_id:
             continue
             
-        # Lấy tên đội bóng chuẩn xác
-        home = get_field(item, ["home_name", "home_team_name", "home_title", "home_team", "home", "team1"], "Đội Nhà")
-        away = get_field(item, ["away_name", "away_team_name", "away_title", "away_team", "away", "team2"], "Đội Khách")
+        home, away, logo = extract_teams_from_item(item)
         
-        # Lấy logo chuẩn xác
-        logo = get_field(item, ["home_logo", "home_image", "logo", "team1_logo", "image", "home"], "")
-        if logo and not logo.startswith("http"):
-            logo = ""
-            
         caster = (
             item.get("caster") or 
             item.get("commentator") or 
@@ -140,7 +180,6 @@ def generate_m3u():
         
         status_icon = "🟢" if status != "FT" else ""
         
-        # Khởi tạo 2 luồng phát [hls] và [flv] đúng chuẩn form mẫu yêu cầu
         streams = [
             ("hls", f"https://playback.livetl002.com/live/{m_id}.m3u8"),
             ("flv", f"https://playback.livetl002.com/live/{m_id}.flv")
@@ -150,11 +189,11 @@ def generate_m3u():
             extinf_line = f'#EXTINF:-1 tvg-logo="{logo}" group-title="Gà Vàng 24h TV" , {status_icon} {time_str} {sport_icon} {home} vs {away} ({caster}) [{stype}]'.strip()
             m3u_lines.append(extinf_line)
             m3u_lines.append(surl)
-            m3u_lines.append("") # Dòng trống phân tách giống hệt mẫu
+            m3u_lines.append("")
 
     with open(OUTPUT_M3U, "w", encoding="utf-8") as f:
         f.write("\n".join(m3u_lines).strip() + "\n")
-    print(f"Đã cập nhật thành công file {OUTPUT_M3U} theo đúng chuẩn mẫu yêu cầu!")
+    print(f"Đã cập nhật thành công file {OUTPUT_M3U}!")
 
 if __name__ == "__main__":
     generate_m3u()
