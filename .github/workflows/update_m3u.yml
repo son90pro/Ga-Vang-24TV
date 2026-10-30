@@ -1,0 +1,31 @@
+name: Auto Update Cakhia M3U
+
+on:
+  schedule:
+    # Chạy tự động mỗi 30 phút
+    - cron: '*/30 * * * *'
+  workflow_dispatch: # Cho phép bấm chạy thủ công trên GitHub
+
+jobs:
+  update-playlist:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Run script to update m3u
+        run: python update_playlist.py
+
+      - name: Commit and push if playlist changed
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add playlist.m3u
+          git diff --quiet && git diff --staged --quiet || (git commit -m "Auto-update M3U playlist [skip ci]" && git push)
