@@ -38,13 +38,11 @@ def get_team_info(obj):
     if isinstance(obj, str):
         name = obj.strip()
     elif isinstance(obj, dict):
-        # Thử lấy tên từ các key con phổ biến
         for k in ["name", "team_name", "title", "common_name", "display_name", "short_name"]:
             val = obj.get(k)
             if isinstance(val, str) and val.strip():
                 name = val.strip()
                 break
-        # Thử lấy logo từ object đội bóng
         for k in ["logo", "image", "badge", "flag", "icon", "url"]:
             val = obj.get(k)
             if isinstance(val, str) and val.startswith("http"):
@@ -100,7 +98,6 @@ def parse_matches(data, sport_icon):
                 a_name, a_logo = get_team_info(item.get(a_key))
                 if a_name:
                     away = a_name
-                    # Đôi khi logo nằm ở đội khách nếu đội nhà không có
                     if not logo and a_logo:
                         logo = a_logo
                 if away:
@@ -114,7 +111,7 @@ def parse_matches(data, sport_icon):
                     logo = l_val.strip()
                     break
 
-        # 4. Dự phòng tuyệt đối: Bóc tách trực tiếp từ chuỗi tiêu đề chung nếu API không tách sẵn key
+        # 4. Dự phòng tuyệt đối: Bóc tách trực tiếp từ chuỗi tiêu đề chung
         if not home or not away:
             for title_k in ["title", "name", "match_name", "slug"]:
                 t_val = item.get(title_k)
@@ -201,4 +198,5 @@ def generate_m3u():
     print(f"Đã cập nhật thành công file {OUTPUT_M3U}!")
 
 if __name__ == "__main__":
+    generate_m3u()
     
