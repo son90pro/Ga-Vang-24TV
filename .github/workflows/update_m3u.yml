@@ -2,9 +2,8 @@ name: Auto Update Cakhia M3U
 
 on:
   schedule:
-    # Chạy tự động mỗi 30 phút
-    - cron: '*/30 * * * *'
-  workflow_dispatch: # Cho phép bấm chạy thủ công trên GitHub
+    - cron: '*/30 * * * *' # Chạy định kỳ mỗi 30 phút
+  workflow_dispatch:
 
 jobs:
   update-playlist:
@@ -28,4 +27,5 @@ jobs:
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git add playlist.m3u
-          git diff --quiet && git diff --staged --quiet || (git commit -m "Auto-update M3U playlist [skip ci]" && git push)
+          git diff --quiet && git diff --staged --quiet || (git commit -m "Auto-update M3U with full team/blv info [skip ci]" && git push)
+          
