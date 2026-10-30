@@ -2,7 +2,7 @@ import json
 import urllib.request
 from datetime import datetime, timezone, timedelta
 
-# Endpoint chính thức của hệ thống API gốc
+# Hai endpoint chính thức chuẩn xác của hệ thống API gốc
 FOOTBALL_API = "https://seo.alpro-api-service.com/v1/live-data"
 BASKETBALL_API = "https://seo.alpro-api-service.com/v1/bb-live-data"
 OUTPUT_M3U = "playlist.m3u"
@@ -35,20 +35,18 @@ def format_match_time(timestamp):
     return datetime.now(vn_tz).strftime("%H:%M %d/%m")
 
 def parse_team_field(team_data):
-    """Trích xuất vạn năng tên và logo từ bất kỳ cấu trúc chuỗi hoặc object nào của API"""
+    """Trích xuất vạn năng tên và logo từ cấu trúc object hoặc string của API"""
     if not team_data:
         return "", ""
     if isinstance(team_data, str):
         return team_data.strip(), ""
     if isinstance(team_data, dict):
-        # Thử quét qua các key tên thông dụng
         name = ""
         for k in ["name", "team_name", "title", "seo_name", "short_name", "common_name", "display_name", "club_name"]:
             v = team_data.get(k)
             if isinstance(v, str) and v.strip():
                 name = v.strip()
                 break
-        # Nếu vẫn chưa thấy, lấy bất kỳ chuỗi hợp lệ nào trong dict
         if not name:
             for v in team_data.values():
                 if isinstance(v, str) and len(v.strip()) > 1 and not v.startswith("http"):
@@ -93,27 +91,17 @@ def parse_matches(data, sport_icon):
         if not format_match_id:
             continue
             
-        # Quét tìm dữ liệu đội nhà
-        home_raw = None
-        for k in ["home", "home_team", "home_name", "home_title", "team1", "t1", "host", "home_info"]:
-            if k in item and item[k]:
-                home_raw = item[k]
-                break
-                
-        # Quét tìm dữ liệu đội khách
-        away_raw = None
-        for k in ["away", "away_team", "away_name", "away_title", "team2", "t2", "guest", "visitor", "away_info"]:
-            if k in item and item[k]:
-                away_raw = item[k]
-                break
+        # Trích xuất thông tin đội nhà và đội khách
+        home_raw = item.get("home") or item.get("home_team") or item.get("team1") or item.get("home_name")
+        away_raw = item.get("away") or item.get("away_team") or item.get("team2") or item.get("away_name")
         
         home_name, home_logo = parse_team_field(home_raw)
         away_name, away_logo = parse_team_field(away_raw)
         
-        home = home_name or "Đội Nhà"
-        away = away_name or "Đội Khách"
+        home = home_name or item.get("home_title") or "Đội Nhà"
+        away = away_name or item.get("away_title") or "Đội Khách"
         
-        # Fallback bóc tách từ title/name nếu vẫn sót
+        # Fallback bóc tách từ tiêu đề nếu thiếu tên đội
         if home == "Đội Nhà" or away == "Đội Khách":
             for tk in ["title", "name", "match_name", "slug"]:
                 tv = item.get(tk)
