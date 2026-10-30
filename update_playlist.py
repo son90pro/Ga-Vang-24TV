@@ -1,9 +1,12 @@
 import json
 import urllib.request
+import re
 from datetime import datetime, timezone, timedelta
+from html import unescape
 
-# Endpoint chính thức mới từ gavangtvs.com
-API_URL = "https://gavangtvs.com/app/uploads/match-content/update-content-live.json"
+# Các endpoint chính thức từ gavangtvs.com (Bóng đá & Bóng rổ)
+FOOTBALL_API = "https://gavangtvs.com/app/uploads/match-content/update-content-live.json"
+BASKETBALL_API = "https://gavangtvs.com/app/uploads/match-content/update-bb-live.json"
 OUTPUT_M3U = "playlist.m3u"
 
 def fetch_json(url):
@@ -21,139 +24,118 @@ def fetch_json(url):
         print(f"Lỗi kết nối {url}: {e}")
         return None
 
-def format_match_time(timestamp):
-    """Chuyển đổi timestamp sang định dạng giờ và ngày tháng chuẩn (VD: 12:00 22/09)"""
-    vn_tz = timezone(timedelta(hours=7))
-    if timestamp:
-        try:
-            ts = int(float(timestamp))
-            dt = datetime.fromtimestamp(ts, vn_tz)
-            return dt.strftime("%H:%M %d/%m")
-        except:
-            pass
-    return datetime.now(vn_tz).strftime("%H:%M %d/%m")
+def parse_html_content(html_text, sport_icon):
+    """Phân tích chuỗi HTML trong live_content để trích xuất thông tin trận đấu"""
+    matches = []
+    if not html_text or not isinstance(html_text, str):
+        return matches
 
-def extract_match_info(item):
-    """Bóc tách thông minh tên đội, logo, BLV và thời gian từ JSON cấu trúc mới"""
-    home = ""
-    away = ""
-    logo = ""
-    caster = "Cris"
+    html_clean = unescape(html_text)
+    found_ids = set()
     
-    if not isinstance(item, dict):
-        return "Đội Nhà", "Đội Khách", "", "Cris", datetime.now(timezone(timedelta(hours=7))).strftime("%H:%M %d/%m"), "⚽"
+    # Các mẫu regex để tìm match_id từ link playback hoặc các thuộc tính dữ liệu
+    id_patterns = [
+        r'/live/([a-fA-F0-9]{24})\.(?:m3u8|flv)',
+        r'data-match-id=["\']?([a-fA-F0-9]{24})["\']?',
+        r'data-id=["\']?([a-fA-F0-9]{24})["\']?',
+        r'match_id["\']?\s*[:=]\s*["\']?([a-fA-F0-9]{24})["\']?'
+    ]
+    
+    # Chia nhỏ HTML thành các khối trận đấu (match-card) nếu có
+    cards = re.split(r'<(?:div|article)[^>]*class="[^"]*match-card[^"]*"', html_clean)
+    if len(cards) <= 1:
+        for pattern in id_patterns:
+            matches_found = re.findall(pattern, html_clean)
+            for m_id in matches_found:
+                if m_id not in found_ids:
+                    found_ids.add(m_id)
+                    matches.append({
+                        "match_id": m_id,
+                        "home": "Đội Nhà",
+                        "away": "Đội Khách",
+                        "logo": "",
+                        "caster": "Cris",
+                        "time": datetime.now(timezone(timedelta(hours=7))).strftime("%H:%M %d/%m"),
+                        "sport_icon": sport_icon,
+                        "status": "LIVE"
+                    })
+    else:
+        for card in cards[1:]:
+            match_id = None
+            for pattern in id_patterns:
+                m = re.search(pattern, card)
+                if m:
+                    match_id = m.group(1)
+                    break
+            
+            if not match_id or match_id in found_ids:
+                continue
+            found_ids.add(match_id)
 
-    # 1. Lấy tên đội nhà / đội khách từ các key phổ biến hoặc object con
-    for k, v in item.items():
-        k_lower = k.lower()
-        if any(x in k_lower for x in ["home", "team1", "host", "t1"]):
-            if isinstance(v, str) and v.strip():
-                if not home: home = v.strip()
-            elif isinstance(v, dict):
-                for sub_k, sub_v in v.items():
-                    if isinstance(sub_v, str) and sub_v.strip():
-                        if not sub_v.startswith("http") and not home:
-                            home = sub_v.strip()
-                        elif sub_v.startswith("http") and not logo:
-                            logo = sub_v.strip()
-        elif any(x in k_lower for x in ["away", "team2", "guest", "visitor", "t2"]):
-            if isinstance(v, str) and v.strip():
-                if not away: away = v.strip()
-            elif isinstance(v, dict):
-                for sub_k, sub_v in v.items():
-                    if isinstance(sub_v, str) and sub_v.strip() and not sub_v.startswith("http"):
-                        if not away: away = sub_v.strip()
-        elif any(x in k_lower for x in ["logo", "image", "badge", "flag", "icon"]):
-            if isinstance(v, str) and v.startswith("http"):
-                if not logo: logo = v.strip()
+            # Trích xuất logo
+            logo_match = re.search(r'src=["\'](https?://[^"\']+\.(?:png|jpg|jpeg|webp))["\']', card, re.IGNORECASE)
+            if not logo_match:
+                logo_match = re.search(r'background-image:\s*url\(["\']?(https?://[^"\']+)["\']?\)', card, re.IGNORECASE)
+            logo = logo_match.group(1) if logo_match else ""
 
-    # 2. Lấy thông tin BLV (Caster)
-    for c_key in ["caster", "commentator", "blv", "author"]:
-        if c_key in item and isinstance(item[c_key], str) and item[c_key].strip():
-            caster = item[c_key].strip()
-            break
+            # Làm sạch text trong card để bóc tách thông tin
+            text_clean = re.sub(r'<[^>]+>', ' ', card)
+            text_clean = ' '.join(text_clean.split())
 
-    # 3. Fallback bóc tách từ chuỗi tiêu đề (title/name) nếu thiếu tên đội
-    if not home or not away or home == "Đội Nhà" or away == "Đội Khách":
-        for title_k in ["title", "name", "match_name", "slug"]:
-            t_val = item.get(title_k)
-            if isinstance(t_val, str) and any(sep in t_val for sep in [" vs ", " VS ", " Vs ", " - "]):
-                for sep in [" vs ", " VS ", " Vs ", " - "]:
-                    if sep in t_val:
-                        parts = t_val.split(sep)
-                        if len(parts) >= 2:
-                            if not home or home == "Đội Nhà": home = parts[0].strip()
-                            if not away or away == "Đội Khách": away = parts[1].strip()
-                            break
+            home, away = "Đội Nhà", "Đội Khách"
+            vs_match = re.search(r'([A-Za-z0-9\s\(\)\.\-]+?)\s+(?:vs|VS|v|V)\s+([A-Za-z0-9\s\(\)\.\-]+)', text_clean)
+            if vs_match:
+                h_candidate = vs_match.group(1).strip().split()[-3:]
+                a_candidate = vs_match.group(2).strip().split()[:3]
+                if h_candidate: home = " ".join(h_candidate)
+                if a_candidate: away = " ".join(a_candidate)
 
-    home = home or "Đội Nhà"
-    away = away or "Đội Khách"
+            caster = "Cris"
+            caster_match = re.search(r'\((?:BLV\s*)?([A-Za-z0-9\s\.]+)\)', text_clean)
+            if caster_match:
+                potential_caster = caster_match.group(1).strip()
+                if len(potential_caster) < 20 and not any(w in potential_caster for w in ["hls", "flv", "Live", "FT"]):
+                    caster = potential_caster
 
-    # 4. Xác định môn thể thao (Bóng đá hay Bóng rổ dựa vào nội dung hoặc đường dẫn logo)
-    sport_icon = "⚽"
-    if "basketball" in logo.lower() or any(b_key in str(item).lower() for b_key in ["basketball", "nba", "bb-"]):
-        sport_icon = "🏀"
+            time_str = datetime.now(timezone(timedelta(hours=7))).strftime("%H:%M %d/%m")
+            time_match = re.search(r'(\d{2}:\d{2}(?:\s+\d{2}/\d{2})?)', text_clean)
+            if time_match:
+                time_str = time_match.group(1).strip()
 
-    raw_time = item.get("start_time") or item.get("time") or item.get("match_time") or item.get("timestamp")
-    time_str = format_match_time(raw_time)
-    status = str(item.get("status_name") or item.get("status") or "").upper()
+            matches.append({
+                "match_id": match_id,
+                "home": home if len(home) > 1 else "Đội Nhà",
+                "away": away if len(away) > 1 else "Đội Khách",
+                "logo": logo,
+                "caster": caster,
+                "time": time_str,
+                "sport_icon": sport_icon,
+                "status": "LIVE"
+            })
 
-    return home, away, logo, caster, time_str, sport_icon, status
+    return matches
 
 def generate_m3u():
-    data = fetch_json(API_URL)
-    if not data:
-        print("Không thể tải dữ liệu từ API mới!")
-        return
-    
-    match_list = []
-    if isinstance(data, dict):
-        for k in ["data", "matches", "list", "result", "items", "content", "matchList"]:
-            if k in data and isinstance(data[k], list):
-                match_list = data[k]
-                break
-        if not match_list:
-            for k, v in data.items():
-                if isinstance(v, list):
-                    match_list = v
-                    break
-    elif isinstance(data, list):
-        match_list = data
-
     matches = []
-    for idx, item in enumerate(match_list):
-        if not isinstance(item, dict):
-            continue
-            
-        match_id = item.get("match_id") or item.get("id") or item.get("matchId")
-        format_match_id = str(match_id).strip() if match_id else None
-        if not format_match_id:
-            continue
-            
-        home, away, logo, caster, time_str, sport_icon, status = extract_match_info(item)
-        
-        if status == "FT":
-            continue
-
-        matches.append({
-            "match_id": format_match_id,
-            "home": home,
-            "away": away,
-            "logo": logo,
-            "caster": caster,
-            "time": time_str,
-            "sport_icon": sport_icon,
-            "status": status
-        })
     
-    # Lọc bỏ các trận đấu trùng lặp dựa trên match_id duy nhất
+    # Lấy dữ liệu Bóng đá
+    fb_data = fetch_json(FOOTBALL_API)
+    if fb_data and isinstance(fb_data, dict):
+        matches.extend(parse_html_content(fb_data.get("live_content", ""), "⚽"))
+
+    # Lấy dữ liệu Bóng rổ
+    bb_data = fetch_json(BASKETBALL_API)
+    if bb_data and isinstance(bb_data, dict):
+        matches.extend(parse_html_content(bb_data.get("live_content", ""), "🏀"))
+
+    # Lọc bỏ trùng lặp theo match_id
     seen_ids = set()
     unique_matches = []
     for m in matches:
         if m["match_id"] not in seen_ids:
             seen_ids.add(m["match_id"])
             unique_matches.append(m)
-            
+
     m3u_lines = ["#EXTM3U", ""]
     
     for m in unique_matches:
@@ -163,10 +145,9 @@ def generate_m3u():
         logo = m["logo"]
         caster = m["caster"]
         time_str = m["time"]
-        status = m["status"]
         sport_icon = m["sport_icon"]
         
-        status_icon = "🟢" if status != "FT" else ""
+        status_icon = "🟢"
         
         streams = [
             ("hls", f"https://playback.livetl002.com/live/{m_id}.m3u8"),
