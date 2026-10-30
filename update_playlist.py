@@ -35,24 +35,33 @@ def format_match_time(timestamp):
     return datetime.now(vn_tz).strftime("%H:%M %d/%m")
 
 def parse_team_field(team_data):
-    """Trích xuất chính xác tên và logo từ object hoặc string của API"""
+    """Trích xuất vạn năng tên và logo từ bất kỳ cấu trúc chuỗi hoặc object nào của API"""
+    if not team_data:
+        return "", ""
     if isinstance(team_data, str):
         return team_data.strip(), ""
-    elif isinstance(team_data, dict):
-        name = (
-            team_data.get("name") or 
-            team_data.get("team_name") or 
-            team_data.get("title") or 
-            team_data.get("seo_name") or 
-            ""
-        )
-        logo = (
-            team_data.get("logo") or 
-            team_data.get("image") or 
-            team_data.get("flag") or 
-            ""
-        )
-        return str(name).strip(), str(logo).strip()
+    if isinstance(team_data, dict):
+        # Thử quét qua các key tên thông dụng
+        name = ""
+        for k in ["name", "team_name", "title", "seo_name", "short_name", "common_name", "display_name", "club_name"]:
+            v = team_data.get(k)
+            if isinstance(v, str) and v.strip():
+                name = v.strip()
+                break
+        # Nếu vẫn chưa thấy, lấy bất kỳ chuỗi hợp lệ nào trong dict
+        if not name:
+            for v in team_data.values():
+                if isinstance(v, str) and len(v.strip()) > 1 and not v.startswith("http"):
+                    name = v.strip()
+                    break
+
+        logo = ""
+        for k in ["logo", "image", "flag", "badge", "icon", "url"]:
+            v = team_data.get(k)
+            if isinstance(v, str) and v.startswith("http"):
+                logo = v.strip()
+                break
+        return name, logo
     return "", ""
 
 def parse_matches(data, sport_icon):
@@ -84,17 +93,41 @@ def parse_matches(data, sport_icon):
         if not format_match_id:
             continue
             
-        # Bóc tách đội nhà và đội khách từ API gốc
-        home_raw = item.get("home") or item.get("home_team") or item.get("team1") or item.get("home_name")
-        away_raw = item.get("away") or item.get("away_team") or item.get("team2") or item.get("away_name")
+        # Quét tìm dữ liệu đội nhà
+        home_raw = None
+        for k in ["home", "home_team", "home_name", "home_title", "team1", "t1", "host", "home_info"]:
+            if k in item and item[k]:
+                home_raw = item[k]
+                break
+                
+        # Quét tìm dữ liệu đội khách
+        away_raw = None
+        for k in ["away", "away_team", "away_name", "away_title", "team2", "t2", "guest", "visitor", "away_info"]:
+            if k in item and item[k]:
+                away_raw = item[k]
+                break
         
         home_name, home_logo = parse_team_field(home_raw)
         away_name, away_logo = parse_team_field(away_raw)
         
-        home = home_name or item.get("home_title") or "Đội Nhà"
-        away = away_name or item.get("away_title") or "Đội Khách"
+        home = home_name or "Đội Nhà"
+        away = away_name or "Đội Khách"
         
-        # Lấy logo ưu tiên từ object đội hoặc các trường ngoài
+        # Fallback bóc tách từ title/name nếu vẫn sót
+        if home == "Đội Nhà" or away == "Đội Khách":
+            for tk in ["title", "name", "match_name", "slug"]:
+                tv = item.get(tk)
+                if isinstance(tv, str):
+                    for sep in [" vs ", " VS ", " Vs ", " - "]:
+                        if sep in tv:
+                            parts = tv.split(sep)
+                            if len(parts) >= 2:
+                                if home == "Đội Nhà": home = parts[0].strip()
+                                if away == "Đội Khách": away = parts[1].strip()
+                                break
+                    if home != "Đội Nhà" and away != "Đội Khách":
+                        break
+
         logo = home_logo or away_logo or item.get("home_logo") or item.get("logo") or item.get("image") or ""
         if isinstance(logo, dict):
             logo = logo.get("url") or logo.get("logo") or ""
@@ -132,7 +165,6 @@ def generate_m3u():
     matches.extend(parse_matches(football_data, "⚽"))
     matches.extend(parse_matches(basketball_data, "🏀"))
     
-    # Lọc bỏ các trận đấu trùng lặp dựa trên match_id duy nhất
     seen_ids = set()
     unique_matches = []
     for m in matches:
