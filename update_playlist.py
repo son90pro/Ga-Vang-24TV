@@ -1,97 +1,139 @@
 import json
 import urllib.request
-import re
 from datetime import datetime, timezone, timedelta
 
-# Endpoint chính chứa HTML live content được phát hiện từ Network tab
-LIVE_CONTENT_URL = "https://cakhia.gold/app/uploads/match-content/update-content-live.json"
-FALLBACK_API = "https://seo.alpro-api-service.com/v1/bb-live-data"
+# Hai API chính thức: Bóng đá (live-data) và Bóng rổ (bb-live-data)
+FOOTBALL_API = "https://seo.alpro-api-service.com/v1/live-data"
+BASKETBALL_API = "https://seo.alpro-api-service.com/v1/bb-live-data"
 OUTPUT_M3U = "playlist.m3u"
 
-def fetch_data(url):
+def fetch_json(url):
     try:
         req = urllib.request.Request(
             url, 
-            headers={
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                "Referer": "https://cakhia.gold/"
-            }
+            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
         )
         with urllib.request.urlopen(req, timeout=10) as response:
-            content = response.read().decode("utf-8")
-            try:
-                return json.loads(content)
-            except:
-                return content
+            return json.loads(response.read().decode("utf-8"))
     except Exception as e:
         print(f"Lỗi kết nối {url}: {e}")
         return None
 
-def generate_m3u():
+def get_vietnam_time(timestamp=None):
+    """Chuyển đổi thời gian chuẩn múi giờ Việt Nam (UTC+7)"""
     vn_tz = timezone(timedelta(hours=7))
-    current_time_str = datetime.now(vn_tz).strftime("%H:%M %d/%m")
+    if timestamp:
+        try:
+            dt = datetime.fromtimestamp(int(timestamp), vn_tz)
+            return dt.strftime("%H:%M %d/%m")
+        except:
+            pass
+    return datetime.now(vn_tz).strftime("%H:%M %d/%m")
+
+def parse_matches(data, sport_icon):
+    results = []
+    if not data:
+        return results
+    
+    match_list = []
+    if isinstance(data, dict):
+        for k, v in data.items():
+            if isinstance(v, list):
+                match_list = v
+                break
+    elif isinstance(data, list):
+        match_list = data
+
+    default_casters = ["Cris", "A Long", "Khang Hi", "Siêu Quậy", "Kayti", "Wem By"]
+
+    for idx, item in enumerate(match_list):
+        if not isinstance(item, dict):
+            continue
+            
+        status = item.get("status_name", "NS")
+        if status == "FT":
+            continue
+            
+        match_id = item.get("match_id") or item.get("id")
+        if not match_id:
+            continue
+            
+        # Lấy tên đội bóng từ các trường dữ liệu thực tế của API
+        home = (
+            item.get("home_name") or 
+            item.get("home_team") or 
+            item.get("home_title") or 
+            item.get("home") or 
+            item.get("team1") or 
+            "Đội Nhà"
+        )
+        away = (
+            item.get("away_name") or 
+            item.get("away_team") or 
+            item.get("away_title") or 
+            item.get("away") or 
+            item.get("team2") or 
+            "Đội Khách"
+        )
+        
+        logo = (
+            item.get("home_logo") or 
+            item.get("home_image") or 
+            item.get("logo") or 
+            ""
+        )
+        
+        caster = (
+            item.get("caster") or 
+            item.get("commentator") or 
+            item.get("blv") or 
+            default_casters[idx % len(default_casters)]
+        )
+        
+        raw_time = item.get("start_time") or item.get("time") or item.get("match_time")
+        time_str = get_vietnam_time(raw_time)
+        
+        results.append({
+            "match_id": match_id,
+            "home": home,
+            "away": away,
+            "logo": logo,
+            "caster": caster,
+            "time": time_str,
+            "status": status,
+            "sport_icon": sport_icon
+        })
+        
+    return results
+
+def generate_m3u():
+    football_data = fetch_json(FOOTBALL_API)
+    basketball_data = fetch_json(BASKETBALL_API)
     
     matches = []
+    matches.extend(parse_matches(football_data, "⚽"))
+    matches.extend(parse_matches(basketball_data, "🏀"))
     
-    # 1. Thử lấy dữ liệu từ file JSON chứa live_content HTML
-    res_data = fetch_data(LIVE_CONTENT_URL)
-    
-    if isinstance(res_data, dict) and "live_content" in res_data:
-        html_content = res_data["live_content"]
-        
-        # Quét tất cả các match_id xuất hiện trong đường dẫn /live/{match_id}
-        match_ids = re.findall(r'/live/([a-zA-Z0-9]+)', html_content)
-        match_ids = list(dict.fromkeys(match_ids)) # Lọc trùng ID
-        
-        default_casters = ["Cris", "A Long", "Khang Hi", "Siêu Quậy", "Kayti", "Wem By"]
-        
-        for idx, m_id in enumerate(match_ids):
-            matches.append({
-                "match_id": m_id,
-                "home": f"Đội Nhà {idx+1}",
-                "away": f"Đội Khách {idx+1}",
-                "logo": "",
-                "caster": default_casters[idx % len(default_casters)],
-                "time": current_time_str
-            })
-
-    # 2. Fallback nếu không đọc được live_content: quét qua API bb-live-data
-    if not matches:
-        api_data = fetch_data(FALLBACK_API)
-        if isinstance(api_data, dict) and "bb_live_data" in api_data:
-            default_casters = ["Cris", "A Long", "Khang Hi", "Siêu Quậy", "Kayti", "Wem By"]
-            for idx, item in enumerate(api_data["bb_live_data"]):
-                status = item.get("status_name", "NS")
-                if status == "FT":
-                    continue
-                m_id = item.get("match_id")
-                matches.append({
-                    "match_id": m_id,
-                    "home": f"Đội Nhà {idx+1}",
-                    "away": f"Đội Khách {idx+1}",
-                    "logo": "",
-                    "caster": default_casters[idx % len(default_casters)],
-                    "time": current_time_str
-                })
-
-    # Tiến hành tạo nội dung file M3U chuẩn khớp yêu cầu
     m3u_content = "#EXTM3U\n\n"
     count = 0
     
-    for match in matches:
-        m_id = match["match_id"]
-        home = match["home"]
-        away = match["away"]
-        logo = match["logo"]
-        caster = match["caster"]
-        time_str = match["time"]
+    for m in matches:
+        m_id = m["match_id"]
+        home = m["home"]
+        away = m["away"]
+        logo = m["logo"]
+        caster = m["caster"]
+        time_str = m["time"]
+        status = m["status"]
+        sport_icon = m["sport_icon"]
         
+        status_icon = "🟢" if status not in ["NS", "TBD"] else ""
+        blv_str = f" ({caster})" if caster else ""
+        
+        title_base = f"{status_icon} {time_str} {sport_icon} {home} vs {away}{blv_str}".strip()
         channel_name = "Gà Vàng 24h TV"
         
-        # Định dạng chuẩn: Giờ Ngày | Icon bóng đá | Tên đội vs Tên đội (BLV)
-        title_base = f"{time_str} ⚽ {home} vs {away} ({caster})"
-        
-        # Tạo 2 luồng phát [hls] và [flv] tương ứng
+        # Tạo 2 luồng phát [hls] và [flv] đúng chuẩn
         streams = [
             {"type": "hls", "url": f"https://playback.livetl002.com/live/{m_id}.m3u8"},
             {"type": "flv", "url": f"https://playback.livetl002.com/live/{m_id}.flv"}
@@ -106,10 +148,9 @@ def generate_m3u():
             m3u_content += m3u_item
             count += 1
 
-    # Lưu kết quả ra file playlist.m3u
     with open(OUTPUT_M3U, "w", encoding="utf-8") as f:
         f.write(m3u_content.strip() + "\n")
-    print(f"Đã cập nhật thành công {count} luồng phát vào file {OUTPUT_M3U}!")
+    print(f"Đã cập nhật thành công {count} luồng vào file {OUTPUT_M3U}!")
 
 if __name__ == "__main__":
     generate_m3u()
