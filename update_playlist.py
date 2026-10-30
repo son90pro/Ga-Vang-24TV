@@ -30,6 +30,20 @@ def get_vietnam_time(timestamp=None):
             pass
     return datetime.now(vn_tz).strftime("%H:%M %d/%m")
 
+def extract_info(item, keys, default_val):
+    """Hàm hỗ trợ bóc tách dữ liệu an toàn (xử lý được cả dạng chuỗi lẫn dictionary từ API)"""
+    for key in keys:
+        val = item.get(key)
+        if val:
+            if isinstance(val, str) and val.strip():
+                return val.strip()
+            elif isinstance(val, dict):
+                for sub_key in ["name", "team_name", "title", "common_name", "url", "link"]:
+                    sub_val = val.get(sub_key)
+                    if isinstance(sub_val, str) and sub_val.strip():
+                        return sub_val.strip()
+    return default_val
+
 def parse_matches(data, sport_icon):
     results = []
     if not data:
@@ -55,33 +69,14 @@ def parse_matches(data, sport_icon):
             continue
             
         match_id = item.get("match_id") or item.get("id")
-        if not match_id:
+        format_match_id = str(match_id).strip() if match_id else None
+        if not format_match_id:
             continue
             
-        # Lấy tên đội bóng từ các trường dữ liệu thực tế của API
-        home = (
-            item.get("home_name") or 
-            item.get("home_team") or 
-            item.get("home_title") or 
-            item.get("home") or 
-            item.get("team1") or 
-            "Đội Nhà"
-        )
-        away = (
-            item.get("away_name") or 
-            item.get("away_team") or 
-            item.get("away_title") or 
-            item.get("away") or 
-            item.get("team2") or 
-            "Đội Khách"
-        )
-        
-        logo = (
-            item.get("home_logo") or 
-            item.get("home_image") or 
-            item.get("logo") or 
-            ""
-        )
+        # Lấy tên đội bóng và logo chuẩn xác (tự động bóc tách dù API trả về chuỗi hay object dict)
+        home = extract_info(item, ["home_name", "home_team_name", "home_title", "home_team", "home", "team1"], "Đội Nhà")
+        away = extract_info(item, ["away_name", "away_team_name", "away_title", "away_team", "away", "team2"], "Đội Khách")
+        logo = extract_info(item, ["home_logo", "home_image", "logo", "team1_logo", "image"], "")
         
         caster = (
             item.get("caster") or 
@@ -94,7 +89,7 @@ def parse_matches(data, sport_icon):
         time_str = get_vietnam_time(raw_time)
         
         results.append({
-            "match_id": match_id,
+            "match_id": format_match_id,
             "home": home,
             "away": away,
             "logo": logo,
@@ -114,10 +109,18 @@ def generate_m3u():
     matches.extend(parse_matches(football_data, "⚽"))
     matches.extend(parse_matches(basketball_data, "🏀"))
     
+    # Lọc bỏ các trận đấu trùng lặp dựa trên match_id duy nhất
+    seen_ids = set()
+    unique_matches = []
+    for m in matches:
+        if m["match_id"] not in seen_ids:
+            seen_ids.add(m["match_id"])
+            unique_matches.append(m)
+            
     m3u_content = "#EXTM3U\n\n"
     count = 0
     
-    for m in matches:
+    for m in unique_matches:
         m_id = m["match_id"]
         home = m["home"]
         away = m["away"]
