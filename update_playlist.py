@@ -19,30 +19,35 @@ def fetch_json(url):
         print(f"Lỗi kết nối {url}: {e}")
         return None
 
-def get_vietnam_time(timestamp=None):
-    """Chuyển đổi thời gian chuẩn múi giờ Việt Nam (UTC+7)"""
+def format_match_time(timestamp):
+    """Chuyển đổi timestamp sang định dạng giờ và ngày tháng chuẩn (VD: 12:00 22/09)"""
     vn_tz = timezone(timedelta(hours=7))
     if timestamp:
         try:
-            dt = datetime.fromtimestamp(int(timestamp), vn_tz)
+            ts = int(float(timestamp))
+            dt = datetime.fromtimestamp(ts, vn_tz)
             return dt.strftime("%H:%M %d/%m")
         except:
             pass
     return datetime.now(vn_tz).strftime("%H:%M %d/%m")
 
-def extract_info(item, keys, default_val):
-    """Hàm hỗ trợ bóc tách dữ liệu an toàn (xử lý được cả dạng chuỗi lẫn dictionary từ API)"""
+def get_field(item, keys, default=""):
+    """Hàm bóc tách thông minh: Hỗ trợ triệt để cả dạng chuỗi lẫn object (dictionary) từ API"""
     for key in keys:
         val = item.get(key)
-        if val:
-            if isinstance(val, str) and val.strip():
-                return val.strip()
+        if val is not None:
+            if isinstance(val, (str, int, float)):
+                s = str(val).strip()
+                if s:
+                    return s
             elif isinstance(val, dict):
-                for sub_key in ["name", "team_name", "title", "common_name", "url", "link"]:
-                    sub_val = val.get(sub_key)
-                    if isinstance(sub_val, str) and sub_val.strip():
-                        return sub_val.strip()
-    return default_val
+                for sub in ["name", "team_name", "title", "common_name", "logo", "image", "url"]:
+                    sub_val = val.get(sub)
+                    if isinstance(sub_val, (str, int, float)):
+                        s = str(sub_val).strip()
+                        if s:
+                            return s
+    return default
 
 def parse_matches(data, sport_icon):
     results = []
@@ -58,13 +63,13 @@ def parse_matches(data, sport_icon):
     elif isinstance(data, list):
         match_list = data
 
-    default_casters = ["Cris", "A Long", "Khang Hi", "Siêu Quậy", "Kayti", "Wem By"]
+    default_casters = ["Cris", "A Long", "Khang Hi", "Siêu Quậy", "Kayti", "Wem By", "Titan", "Naruto", "Đoàn Dự", "Rio", "Lữ Bố.Vip"]
 
     for idx, item in enumerate(match_list):
         if not isinstance(item, dict):
             continue
             
-        status = item.get("status_name", "NS")
+        status = str(item.get("status_name") or item.get("status") or "").upper()
         if status == "FT":
             continue
             
@@ -73,11 +78,15 @@ def parse_matches(data, sport_icon):
         if not format_match_id:
             continue
             
-        # Lấy tên đội bóng và logo chuẩn xác (tự động bóc tách dù API trả về chuỗi hay object dict)
-        home = extract_info(item, ["home_name", "home_team_name", "home_title", "home_team", "home", "team1"], "Đội Nhà")
-        away = extract_info(item, ["away_name", "away_team_name", "away_title", "away_team", "away", "team2"], "Đội Khách")
-        logo = extract_info(item, ["home_logo", "home_image", "logo", "team1_logo", "image"], "")
+        # Lấy tên đội bóng chuẩn xác
+        home = get_field(item, ["home_name", "home_team_name", "home_title", "home_team", "home", "team1"], "Đội Nhà")
+        away = get_field(item, ["away_name", "away_team_name", "away_title", "away_team", "away", "team2"], "Đội Khách")
         
+        # Lấy logo chuẩn xác
+        logo = get_field(item, ["home_logo", "home_image", "logo", "team1_logo", "image", "home"], "")
+        if logo and not logo.startswith("http"):
+            logo = ""
+            
         caster = (
             item.get("caster") or 
             item.get("commentator") or 
@@ -86,7 +95,7 @@ def parse_matches(data, sport_icon):
         )
         
         raw_time = item.get("start_time") or item.get("time") or item.get("match_time")
-        time_str = get_vietnam_time(raw_time)
+        time_str = format_match_time(raw_time)
         
         results.append({
             "match_id": format_match_id,
@@ -117,8 +126,7 @@ def generate_m3u():
             seen_ids.add(m["match_id"])
             unique_matches.append(m)
             
-    m3u_content = "#EXTM3U\n\n"
-    count = 0
+    m3u_lines = ["#EXTM3U", ""]
     
     for m in unique_matches:
         m_id = m["match_id"]
@@ -130,30 +138,23 @@ def generate_m3u():
         status = m["status"]
         sport_icon = m["sport_icon"]
         
-        status_icon = "🟢" if status not in ["NS", "TBD"] else ""
-        blv_str = f" ({caster})" if caster else ""
+        status_icon = "🟢" if status != "FT" else ""
         
-        title_base = f"{status_icon} {time_str} {sport_icon} {home} vs {away}{blv_str}".strip()
-        channel_name = "Gà Vàng 24h TV"
-        
-        # Tạo 2 luồng phát [hls] và [flv] đúng chuẩn
+        # Khởi tạo 2 luồng phát [hls] và [flv] đúng chuẩn form mẫu yêu cầu
         streams = [
-            {"type": "hls", "url": f"https://playback.livetl002.com/live/{m_id}.m3u8"},
-            {"type": "flv", "url": f"https://playback.livetl002.com/live/{m_id}.flv"}
+            ("hls", f"https://playback.livetl002.com/live/{m_id}.m3u8"),
+            ("flv", f"https://playback.livetl002.com/live/{m_id}.flv")
         ]
         
-        for stream in streams:
-            stype = stream["type"]
-            surl = stream["url"]
-            full_title = f"{title_base} [{stype}]"
-            
-            m3u_item = f'#EXTINF:-1 tvg-logo="{logo}" group-title="{channel_name}" , {full_title}\n{surl}\n\n'
-            m3u_content += m3u_item
-            count += 1
+        for stype, surl in streams:
+            extinf_line = f'#EXTINF:-1 tvg-logo="{logo}" group-title="Gà Vàng 24h TV" , {status_icon} {time_str} {sport_icon} {home} vs {away} ({caster}) [{stype}]'.strip()
+            m3u_lines.append(extinf_line)
+            m3u_lines.append(surl)
+            m3u_lines.append("") # Dòng trống phân tách giống hệt mẫu
 
     with open(OUTPUT_M3U, "w", encoding="utf-8") as f:
-        f.write(m3u_content.strip() + "\n")
-    print(f"Đã cập nhật thành công {count} luồng vào file {OUTPUT_M3U}!")
+        f.write("\n".join(m3u_lines).strip() + "\n")
+    print(f"Đã cập nhật thành công file {OUTPUT_M3U} theo đúng chuẩn mẫu yêu cầu!")
 
 if __name__ == "__main__":
     generate_m3u()
